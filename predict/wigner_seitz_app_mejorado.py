@@ -49,16 +49,46 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def create_3d_scatter_interactive(analyzer, results, plot_range, show_normal, show_vacancies, show_interstitials):
-    """Visualización 3D interactiva con Plotly"""
+def create_3d_scatter_interactive(analyzer, results, plot_range, show_normal, show_vacancies, show_interstitials, 
+                                   use_auto_range=True, ref_box=None):
+    """Visualización 3D interactiva con Plotly
+    
+    Args:
+        analyzer: WignerSeitzAnalyzer instance
+        results: Diccionario de resultados
+        plot_range: Rango manual (usado si use_auto_range=False)
+        show_normal: Mostrar átomos normales
+        show_vacancies: Mostrar vacancias
+        show_interstitials: Mostrar intersticiales
+        use_auto_range: Si True, calcula el rango basado en la celda de simulación
+        ref_box: SimulationBox de referencia (necesario si use_auto_range=True)
+    """
     fig = go.Figure()
+    
+    # Calcular rangos basados en la celda de simulación
+    if use_auto_range and ref_box is not None:
+        # Obtener las dimensiones de la caja desde SimulationBox
+        x_range = [ref_box.xlo, ref_box.xhi]
+        y_range = [ref_box.ylo, ref_box.yhi]
+        z_range = [ref_box.zlo, ref_box.zhi]
+    else:
+        # Usar rango manual
+        x_range = [-plot_range, plot_range]
+        y_range = [-plot_range, plot_range]
+        z_range = [-plot_range, plot_range]
     
     # Sitios normales
     if show_normal:
         normal = np.where(analyzer.occupancy == 1)[0]
         if len(normal) > 0:
             pos = analyzer.reference[normal]
-            mask = np.all(np.abs(pos) < plot_range, axis=1)
+            # Filtrar puntos dentro del rango
+            if use_auto_range:
+                mask = ((pos[:, 0] >= x_range[0]) & (pos[:, 0] <= x_range[1]) &
+                       (pos[:, 1] >= y_range[0]) & (pos[:, 1] <= y_range[1]) &
+                       (pos[:, 2] >= z_range[0]) & (pos[:, 2] <= z_range[1]))
+            else:
+                mask = np.all(np.abs(pos) < plot_range, axis=1)
             pos = pos[mask]
             if len(pos) > 0:
                 fig.add_trace(go.Scatter3d(
@@ -78,7 +108,12 @@ def create_3d_scatter_interactive(analyzer, results, plot_range, show_normal, sh
     # Vacancias
     if show_vacancies and len(results['vacancies']) > 0:
         pos = analyzer.reference[results['vacancies']]
-        mask = np.all(np.abs(pos) < plot_range, axis=1)
+        if use_auto_range:
+            mask = ((pos[:, 0] >= x_range[0]) & (pos[:, 0] <= x_range[1]) &
+                   (pos[:, 1] >= y_range[0]) & (pos[:, 1] <= y_range[1]) &
+                   (pos[:, 2] >= z_range[0]) & (pos[:, 2] <= z_range[1]))
+        else:
+            mask = np.all(np.abs(pos) < plot_range, axis=1)
         pos = pos[mask]
         if len(pos) > 0:
             fig.add_trace(go.Scatter3d(
@@ -99,7 +134,12 @@ def create_3d_scatter_interactive(analyzer, results, plot_range, show_normal, sh
     # Intersticiales
     if show_interstitials and len(results['interstitial_atoms']) > 0:
         pos = analyzer.defective[results['interstitial_atoms']]
-        mask = np.all(np.abs(pos) < plot_range, axis=1)
+        if use_auto_range:
+            mask = ((pos[:, 0] >= x_range[0]) & (pos[:, 0] <= x_range[1]) &
+                   (pos[:, 1] >= y_range[0]) & (pos[:, 1] <= y_range[1]) &
+                   (pos[:, 2] >= z_range[0]) & (pos[:, 2] <= z_range[1]))
+        else:
+            mask = np.all(np.abs(pos) < plot_range, axis=1)
         pos = pos[mask]
         if len(pos) > 0:
             fig.add_trace(go.Scatter3d(
@@ -122,13 +162,30 @@ def create_3d_scatter_interactive(analyzer, results, plot_range, show_normal, sh
     if analyzer.use_affine_mapping:
         title += ' (con mapeo afín)'
     
+    # Calcular aspect ratio para mantener proporciones correctas
+    if use_auto_range:
+        x_size = x_range[1] - x_range[0]
+        y_size = y_range[1] - y_range[0]
+        z_size = z_range[1] - z_range[0]
+        max_size = max(x_size, y_size, z_size)
+        aspect_ratio = dict(
+            x=x_size/max_size,
+            y=y_size/max_size,
+            z=z_size/max_size
+        )
+        aspectmode = 'manual'
+    else:
+        aspect_ratio = dict(x=1, y=1, z=1)
+        aspectmode = 'cube'
+    
     fig.update_layout(
         title=dict(text=title, font=dict(size=18, color='#1f77b4')),
         scene=dict(
-            xaxis=dict(title='X (Å)', range=[-plot_range, plot_range], backgroundcolor="rgb(230, 230,230)"),
-            yaxis=dict(title='Y (Å)', range=[-plot_range, plot_range], backgroundcolor="rgb(230, 230,230)"),
-            zaxis=dict(title='Z (Å)', range=[-plot_range, plot_range], backgroundcolor="rgb(230, 230,230)"),
-            aspectmode='cube'
+            xaxis=dict(title='X (Å)', range=x_range, backgroundcolor="rgb(230, 230,230)"),
+            yaxis=dict(title='Y (Å)', range=y_range, backgroundcolor="rgb(230, 230,230)"),
+            zaxis=dict(title='Z (Å)', range=z_range, backgroundcolor="rgb(230, 230,230)"),
+            aspectmode=aspectmode,
+            aspectratio=aspect_ratio
         ),
         height=700,
         showlegend=True,
@@ -557,6 +614,33 @@ def create_nearest_neighbor_plot(analyzer, results, plot_range):
     )
     
     return fig
+def export_defects_dump(analyzer, results, filename="defects_only.dump"):
+    """
+    Exporta un archivo LAMMPS .dump con las vacancias e intersticiales detectadas.
+    """
+    vac_pos = analyzer.reference[results['vacancies']] if len(results['vacancies']) > 0 else np.empty((0,3))
+    int_pos = analyzer.defective[results['interstitial_atoms']] if len(results['interstitial_atoms']) > 0 else np.empty((0,3))
+
+    # Concatenar posiciones y asignar tipo: 1 = vacancia, 2 = intersticial
+    all_pos = np.vstack((vac_pos, int_pos))
+    types = np.array([1]*len(vac_pos) + [2]*len(int_pos))
+
+    box = analyzer.reference_box  # <- corrección clave
+
+    with open(filename, "w") as f:
+        f.write("ITEM: TIMESTEP\n0\n")
+        f.write(f"ITEM: NUMBER OF ATOMS\n{len(all_pos)}\n")
+        f.write("ITEM: BOX BOUNDS pp pp pp\n")
+        f.write(f"{box.xlo} {box.xhi}\n")
+        f.write(f"{box.ylo} {box.yhi}\n")
+        f.write(f"{box.zlo} {box.zhi}\n")
+        f.write("ITEM: ATOMS id type x y z\n")
+
+        for i, (typ, pos) in enumerate(zip(types, all_pos), start=1):
+            f.write(f"{i} {typ} {pos[0]:.5f} {pos[1]:.5f} {pos[2]:.5f}\n")
+
+    return filename
+
 
 
 def main():
@@ -778,25 +862,62 @@ def main():
         
         # Visualización principal
         st.subheader("🎨 Visualización 3D Interactiva")
-        
+        st.markdown("---")
+        st.subheader("💾 Exportar Defectos")
+
+        if st.button("Exportar archivo .dump de defectos"):
+            output_path = os.path.join(tempfile.gettempdir(), "defects_only.dump")
+            filename = export_defects_dump(analyzer, results, output_path)
+            with open(filename, "rb") as f:
+                st.download_button(
+                    label="⬇️ Descargar defects_only.dump",
+                    data=f,
+                    file_name="defects_only.dump",
+                    mime="text/plain"
+                )
+                
         col1, col2 = st.columns([3, 1])
         
         with col2:
-            plot_range = st.slider(
-                "Rango (Å)", 5.0, 50.0, 20.0, 5.0,
-                help="Tamaño de la región visible"
+            use_auto_range = st.checkbox(
+                "🎯 Ajuste automático de rango",
+                value=True,
+                help="Ajusta el rango automáticamente según las dimensiones de la celda de simulación"
             )
+            
+            if not use_auto_range:
+                plot_range = st.slider(
+                    "Rango manual (Å)", 5.0, 100.0, 20.0, 5.0,
+                    help="Tamaño de la región visible (desde -rango hasta +rango)"
+                )
+            else:
+                plot_range = 20.0  # Valor por defecto, no se usa
+                ref_box = st.session_state.get('ref_box', None)
+                if ref_box is not None:
+                    st.info(f"""
+                    📏 **Dimensiones de la celda:**
+                    - X: {ref_box.lx:.2f} Å ({ref_box.xlo:.2f} → {ref_box.xhi:.2f})
+                    - Y: {ref_box.ly:.2f} Å ({ref_box.ylo:.2f} → {ref_box.yhi:.2f})
+                    - Z: {ref_box.lz:.2f} Å ({ref_box.zlo:.2f} → {ref_box.zhi:.2f})
+                    """)
+            
+            st.markdown("---")
             
             show_normal = st.checkbox("Átomos normales", value=True)
             show_vacancies = st.checkbox("Vacancias", value=True)
             show_interstitials = st.checkbox("Intersticiales", value=True)
             
+            st.markdown("---")
+            
             st.info("💡 **Controles:**\n- Arrastra para rotar\n- Scroll para zoom\n- Hover para info")
         
         with col1:
+            ref_box = st.session_state.get('ref_box', None)
             fig = create_3d_scatter_interactive(
                 analyzer, results, plot_range,
-                show_normal, show_vacancies, show_interstitials
+                show_normal, show_vacancies, show_interstitials,
+                use_auto_range=use_auto_range,
+                ref_box=ref_box
             )
             st.plotly_chart(fig, use_container_width=True)
         
